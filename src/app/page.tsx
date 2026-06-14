@@ -4,7 +4,6 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { doc, setDoc, getDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { questions } from "@/lib/questions";
 
 export default function Home() {
   const router = useRouter();
@@ -29,7 +28,7 @@ export default function Home() {
       });
 
       router.push(`/teacher/${code}`);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
       setError("Failed to create match. Check your Firebase config.");
     } finally {
@@ -57,7 +56,7 @@ export default function Home() {
       }
 
       router.push(`/match/${code}?name=${encodeURIComponent(studentName)}`);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
       setError("Failed to join match. Check your connection.");
       setIsJoining(false);
