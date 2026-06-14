@@ -4,6 +4,8 @@ import { useEffect, useState, useRef } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { questions } from "@/lib/questions";
 import Editor from "@monaco-editor/react";
+import type Peer from "peerjs";
+import type { DataConnection } from "peerjs";
 
 export default function StudentMatch() {
   const { matchId } = useParams();
@@ -20,7 +22,7 @@ export default function StudentMatch() {
   const [submittedForIndex, setSubmittedForIndex] = useState<number>(-1);
 
   // Store the active connection so we can submit code
-  const connectionRef = useRef<unknown>(null);
+  const connectionRef = useRef<DataConnection | null>(null);
 
   useEffect(() => {
     if (!studentName) {
@@ -30,14 +32,15 @@ export default function StudentMatch() {
 
     if (!matchId) return;
 
-    let peerInstance: unknown = null;
+    let peerInstance: Peer | null = null;
 
     const initPeer = async () => {
       try {
-        const Peer = (await import("peerjs")).default;
-        peerInstance = new Peer(); // Random ID for student
+        const PeerClass = (await import("peerjs")).default;
+        peerInstance = new PeerClass(); // Random ID for student
 
         peerInstance.on("open", () => {
+          if (!peerInstance) return;
           // Connect to the teacher's fixed ID
           const hostId = `codingrace-v1-${matchId}`;
           const conn = peerInstance.connect(hostId);
@@ -46,12 +49,12 @@ export default function StudentMatch() {
             console.log("Connected to teacher!");
             connectionRef.current = conn;
             setLoading(false);
-            // Optionally, tell teacher we joined, but teacher handles it via connection event
           });
 
           conn.on("data", (data: unknown) => {
-            if (data.type === "QUESTION_UPDATE") {
-              const newIndex = data.index;
+            const msg = data as { type: string; index: number };
+            if (msg.type === "QUESTION_UPDATE") {
+              const newIndex = msg.index;
               setCurrentQuestionIndex(newIndex);
               
               // Reset code and submission state if teacher moves to a new question

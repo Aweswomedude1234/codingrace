@@ -3,6 +3,8 @@
 import { useEffect, useState, useRef } from "react";
 import { useParams } from "next/navigation";
 import { questions } from "@/lib/questions";
+import type Peer from "peerjs";
+import type { DataConnection } from "peerjs";
 
 type ResponseData = {
   studentName: string;
@@ -20,7 +22,7 @@ export default function TeacherDashboard() {
   
   // Keep references for use inside PeerJS callbacks
   const currentQuestionIndexRef = useRef(0);
-  const [connections, setConnections] = useState<unknown[]>([]);
+  const [connections, setConnections] = useState<DataConnection[]>([]);
 
   useEffect(() => {
     currentQuestionIndexRef.current = currentQuestionIndex;
@@ -29,20 +31,20 @@ export default function TeacherDashboard() {
   useEffect(() => {
     if (!matchId) return;
 
-    let peerInstance: unknown = null;
+    let peerInstance: Peer | null = null;
 
     const initPeer = async () => {
       try {
-        const Peer = (await import("peerjs")).default;
+        const PeerClass = (await import("peerjs")).default;
         // Use a unique prefix so it's less likely to collide on the public server
-        peerInstance = new Peer(`codingrace-v1-${matchId}`);
+        peerInstance = new PeerClass(`codingrace-v1-${matchId}`);
 
         peerInstance.on("open", (id: string) => {
           console.log("Teacher ready with ID:", id);
           setLoading(false);
         });
 
-        peerInstance.on("connection", (conn: unknown) => {
+        peerInstance.on("connection", (conn: DataConnection) => {
           console.log("Student connected:", conn.peer);
           
           setConnections((prev) => [...prev, conn]);
@@ -53,12 +55,13 @@ export default function TeacherDashboard() {
           });
 
           conn.on("data", (data: unknown) => {
-            if (data.type === "SUBMIT") {
+            const msg = data as { type: string; name: string; code: string; index: number };
+            if (msg.type === "SUBMIT") {
               setResponses((prev) => {
                 const newResponses = [...prev, {
-                  studentName: data.name,
-                  code: data.code,
-                  questionIndex: data.index,
+                  studentName: msg.name,
+                  code: msg.code,
+                  questionIndex: msg.index,
                   timestamp: new Date().toISOString()
                 }];
                 // Sort by latest first
