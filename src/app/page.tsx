@@ -2,8 +2,6 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { doc, setDoc, getDoc } from "firebase/firestore";
-import { db } from "@/lib/firebase";
 
 export default function Home() {
   const router = useRouter();
@@ -13,30 +11,15 @@ export default function Home() {
   const [isJoining, setIsJoining] = useState(false);
   const [error, setError] = useState("");
 
-  const handleCreateMatch = async () => {
+  const handleCreateMatch = () => {
     setIsCreating(true);
     setError("");
-    try {
-      const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-      
-      // Initialize the match in Firestore
-      await setDoc(doc(db, "matches", code), {
-        matchId: code,
-        currentQuestionIndex: 0,
-        status: "active",
-        createdAt: new Date().toISOString()
-      });
-
-      router.push(`/teacher/${code}`);
-    } catch (err: unknown) {
-      console.error(err);
-      setError("Failed to create match. Check your Firebase config.");
-    } finally {
-      setIsCreating(false);
-    }
+    // Generate a simple 6-character code
+    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    router.push(`/teacher/${code}`);
   };
 
-  const handleJoinMatch = async (e: React.FormEvent) => {
+  const handleJoinMatch = (e: React.FormEvent) => {
     e.preventDefault();
     if (!joinCode || !studentName) {
       setError("Please enter both your name and a match code.");
@@ -45,22 +28,10 @@ export default function Home() {
     
     setIsJoining(true);
     setError("");
-    try {
-      const code = joinCode.toUpperCase();
-      const matchDoc = await getDoc(doc(db, "matches", code));
-      
-      if (!matchDoc.exists()) {
-        setError("Match not found! Please check the code.");
-        setIsJoining(false);
-        return;
-      }
-
-      router.push(`/match/${code}?name=${encodeURIComponent(studentName)}`);
-    } catch (err: unknown) {
-      console.error(err);
-      setError("Failed to join match. Check your connection.");
-      setIsJoining(false);
-    }
+    const code = joinCode.toUpperCase();
+    
+    // We just route them to the match page. The connection will be handled there.
+    router.push(`/match/${code}?name=${encodeURIComponent(studentName)}`);
   };
 
   return (
@@ -68,6 +39,7 @@ export default function Home() {
       <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
         <h2 style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>Welcome to <span className="title-gradient">Coding Race</span></h2>
         <p style={{ color: 'var(--text-secondary)', fontSize: '1.1rem' }}>A real-time Python programming competition.</p>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: '0.5rem' }}>No database required! Powered by P2P WebRTC.</p>
       </div>
 
       {error && (

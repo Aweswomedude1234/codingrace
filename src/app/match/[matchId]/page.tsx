@@ -1,9 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
-import { doc, onSnapshot, collection, addDoc } from "firebase/firestore";
-import { db } from "@/lib/firebase";
 import { questions } from "@/lib/questions";
 import Editor from "@monaco-editor/react";
 
@@ -21,6 +19,9 @@ export default function StudentMatch() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittedForIndex, setSubmittedForIndex] = useState<number>(-1);
 
+  // Store the active connection so we can submit code
+  const connectionRef = useRef<unknown>(null);
+
   useEffect(() => {
     if (!studentName) {
       router.push("/");
@@ -29,44 +30,81 @@ export default function StudentMatch() {
 
     if (!matchId) return;
 
-    const matchRef = doc(db, "matches", matchId as string);
-    const unsubMatch = onSnapshot(matchRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const newIndex = docSnap.data().currentQuestionIndex || 0;
-        setCurrentQuestionIndex(newIndex);
-        
-        // Reset code if teacher moves to a new question
-        setSubmittedForIndex((prevIndex) => {
-          if (prevIndex !== newIndex) {
-            setCode(""); // Clear editor for new question
-          }
-          return prevIndex;
+    let peerInstance: unknown = null;
+
+    const initPeer = async () => {
+      try {
+        const Peer = (await import("peerjs")).default;
+        peerInstance = new Peer(); // Random ID for student
+
+        peerInstance.on("open", () => {
+          // Connect to the teacher's fixed ID
+          const hostId = `codingrace-v1-${matchId}`;
+          const conn = peerInstance.connect(hostId);
+
+          conn.on("open", () => {
+            console.log("Connected to teacher!");
+            connectionRef.current = conn;
+            setLoading(false);
+            // Optionally, tell teacher we joined, but teacher handles it via connection event
+          });
+
+          conn.on("data", (data: unknown) => {
+            if (data.type === "QUESTION_UPDATE") {
+              const newIndex = data.index;
+              setCurrentQuestionIndex(newIndex);
+              
+              // Reset code and submission state if teacher moves to a new question
+              setSubmittedForIndex((prevIndex) => {
+                if (prevIndex !== newIndex) {
+                  setCode(""); // Clear editor for new question
+                }
+                return prevIndex;
+              });
+            }
+          });
+
+          conn.on("close", () => {
+            console.log("Connection closed by teacher");
+            setError("Host disconnected. The match may have ended.");
+          });
         });
 
-      } else {
-        setError("Match closed or not found!");
-      }
-      setLoading(false);
-    }, (err) => {
-      console.error(err);
-      setError("Connection lost.");
-      setLoading(false);
-    });
+        peerInstance.on("error", (err: unknown) => {
+          console.error(err);
+          setError("Failed to connect. Make sure the match code is correct and the teacher is online.");
+          setLoading(false);
+        });
 
-    return () => unsubMatch();
+      } catch (err) {
+        console.error("Failed to load PeerJS", err);
+        setError("Error initializing connection.");
+        setLoading(false);
+      }
+    };
+
+    initPeer();
+
+    return () => {
+      if (peerInstance) {
+        peerInstance.destroy();
+      }
+    };
   }, [matchId, studentName, router]);
 
-  const handleSubmit = async () => {
-    if (!code.trim()) return;
+  const handleSubmit = () => {
+    if (!code.trim() || !connectionRef.current || !connectionRef.current.open) {
+      alert("Not connected to the host or empty code.");
+      return;
+    }
     
     setIsSubmitting(true);
     try {
-      const responsesRef = collection(db, "matches", matchId as string, "responses");
-      await addDoc(responsesRef, {
-        studentName,
+      connectionRef.current.send({
+        type: "SUBMIT",
+        name: studentName,
         code,
-        questionIndex: currentQuestionIndex,
-        timestamp: new Date().toISOString()
+        index: currentQuestionIndex
       });
       setSubmittedForIndex(currentQuestionIndex);
     } catch (err) {
@@ -77,7 +115,7 @@ export default function StudentMatch() {
     }
   };
 
-  if (loading) return <div className="animate-pulse">Loading race...</div>;
+  if (loading) return <div className="animate-pulse">Connecting to Teacher...</div>;
   if (error) return <div style={{ color: 'var(--error-color)' }}>{error}</div>;
 
   const currentQuestion = questions[currentQuestionIndex];

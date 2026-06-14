@@ -1,9 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useParams } from "next/navigation";
-import { doc, onSnapshot, updateDoc, collection, query } from "firebase/firestore";
-import { db } from "@/lib/firebase";
 import { questions } from "@/lib/questions";
 
 type ResponseData = {
@@ -19,67 +17,115 @@ export default function TeacherDashboard() {
   const [responses, setResponses] = useState<ResponseData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  
+  // Keep references for use inside PeerJS callbacks
+  const currentQuestionIndexRef = useRef(0);
+  const [connections, setConnections] = useState<unknown[]>([]);
+
+  useEffect(() => {
+    currentQuestionIndexRef.current = currentQuestionIndex;
+  }, [currentQuestionIndex]);
 
   useEffect(() => {
     if (!matchId) return;
 
-    // Listen to match status (current question)
-    const matchRef = doc(db, "matches", matchId as string);
-    const unsubMatch = onSnapshot(matchRef, (docSnap) => {
-      if (docSnap.exists()) {
-        setCurrentQuestionIndex(docSnap.data().currentQuestionIndex || 0);
-      } else {
-        setError("Match not found!");
-      }
-      setLoading(false);
-    }, (err) => {
-      console.error(err);
-      setError("Failed to sync match data. Is Firebase configured?");
-      setLoading(false);
-    });
+    let peerInstance: unknown = null;
 
-    // Listen to responses
-    const responsesRef = collection(db, "matches", matchId as string, "responses");
-    const q = query(responsesRef);
-    const unsubResponses = onSnapshot(q, (snapshot) => {
-      const respData: ResponseData[] = [];
-      snapshot.forEach((doc) => {
-        respData.push(doc.data() as ResponseData);
-      });
-      // Sort by latest first
-      respData.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-      setResponses(respData);
-    });
+    const initPeer = async () => {
+      try {
+        const Peer = (await import("peerjs")).default;
+        // Use a unique prefix so it's less likely to collide on the public server
+        peerInstance = new Peer(`codingrace-v1-${matchId}`);
+
+        peerInstance.on("open", (id: string) => {
+          console.log("Teacher ready with ID:", id);
+          setLoading(false);
+        });
+
+        peerInstance.on("connection", (conn: unknown) => {
+          console.log("Student connected:", conn.peer);
+          
+          setConnections((prev) => [...prev, conn]);
+
+          conn.on("open", () => {
+            // Send current question index when a new student connects
+            conn.send({ type: "QUESTION_UPDATE", index: currentQuestionIndexRef.current });
+          });
+
+          conn.on("data", (data: unknown) => {
+            if (data.type === "SUBMIT") {
+              setResponses((prev) => {
+                const newResponses = [...prev, {
+                  studentName: data.name,
+                  code: data.code,
+                  questionIndex: data.index,
+                  timestamp: new Date().toISOString()
+                }];
+                // Sort by latest first
+                return newResponses.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+              });
+            }
+          });
+
+          conn.on("close", () => {
+            setConnections((prev) => prev.filter((c) => c.peer !== conn.peer));
+          });
+        });
+
+        peerInstance.on("error", (err: unknown) => {
+          console.error(err);
+          // Only show error if we haven't loaded, otherwise it might just be a student disconnecting randomly
+          if (loading) {
+            setError("Failed to create match. The code might be in use or the network is blocked.");
+            setLoading(false);
+          }
+        });
+      } catch (err) {
+        console.error("Failed to load PeerJS", err);
+        setError("Error initializing PeerJS.");
+        setLoading(false);
+      }
+    };
+
+    initPeer();
 
     return () => {
-      unsubMatch();
-      unsubResponses();
+      if (peerInstance) {
+        peerInstance.destroy();
+      }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matchId]);
 
-  const handleNextQuestion = async () => {
+  const broadcastQuestionUpdate = (newIndex: number) => {
+    connections.forEach((conn) => {
+      if (conn.open) {
+        conn.send({ type: "QUESTION_UPDATE", index: newIndex });
+      }
+    });
+  };
+
+  const handleNextQuestion = () => {
     if (currentQuestionIndex < questions.length - 1) {
-      await updateDoc(doc(db, "matches", matchId as string), {
-        currentQuestionIndex: currentQuestionIndex + 1
-      });
+      const newIndex = currentQuestionIndex + 1;
+      setCurrentQuestionIndex(newIndex);
+      broadcastQuestionUpdate(newIndex);
     }
   };
 
-  const handlePrevQuestion = async () => {
+  const handlePrevQuestion = () => {
     if (currentQuestionIndex > 0) {
-      await updateDoc(doc(db, "matches", matchId as string), {
-        currentQuestionIndex: currentQuestionIndex - 1
-      });
+      const newIndex = currentQuestionIndex - 1;
+      setCurrentQuestionIndex(newIndex);
+      broadcastQuestionUpdate(newIndex);
     }
   };
 
-  if (loading) return <div className="animate-pulse">Loading dashboard...</div>;
+  if (loading) return <div className="animate-pulse">Starting Host Server...</div>;
   if (error) return <div style={{ color: 'var(--error-color)' }}>{error}</div>;
 
   const currentQuestion = questions[currentQuestionIndex];
-  
-  // Filter responses to show only those for the current question
-  const currentResponses = responses.filter(r => r.questionIndex === currentQuestionIndex);
+  const currentResponses = responses.filter((r) => r.questionIndex === currentQuestionIndex);
 
   return (
     <div style={{ width: '100%', maxWidth: '1200px', display: 'flex', flexDirection: 'column', gap: '2rem' }} className="animate-fade-in">
@@ -89,6 +135,7 @@ export default function TeacherDashboard() {
           <h2 style={{ fontSize: '1.2rem', color: 'var(--text-secondary)' }}>Match Code</h2>
           <div style={{ fontSize: '3rem', fontWeight: 800, letterSpacing: '4px' }} className="title-gradient">{matchId}</div>
           <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Instruct students to enter this code to join.</p>
+          <p style={{ fontSize: '0.8rem', color: 'var(--success-color)', marginTop: '0.5rem' }}>● {connections.length} student(s) connected</p>
         </div>
         
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
